@@ -1,0 +1,1 @@
+{"hp": 100, "attacks": [{"name": "Trip Over", "damage": 10, "modifier": "+", "cost": [], "text": "Flip 3 com i heads th sczack does 0 more damage as CT gL e", "type": "grass"}], "confidence": "partial", "notes": ["Couldn't read the HP number - using 100.", "Read in the browser with tesseract.js."], "source": "ocr"}

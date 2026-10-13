@@ -1,0 +1,143 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>PokéCard 3D</title>
+<!--PC3D_HEAD-->
+<style>
+:root{--bg:#0f1220;--panel:#181c30;--line:#2a3050;--fg:#e8ebf7;--mut:#8f97b8;--acc:#ffcb05}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px system-ui,sans-serif}
+header{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:18px 24px;border-bottom:1px solid var(--line)}h1{margin:0;font-size:20px}h1 span{color:var(--acc)}
+main{display:grid;grid-template-columns:380px 1fr;gap:20px;padding:20px 24px;max-width:1200px;margin:auto}
+@media(max-width:860px){main{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+.tabs{display:flex;gap:6px;margin-bottom:14px}.tabs button{flex:1}
+button{background:#232948;color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:9px 12px;cursor:pointer;font:inherit}
+button.on,button.primary{background:var(--acc);color:#1a1a1a;border-color:var(--acc);font-weight:600}
+button:disabled{opacity:.5;cursor:wait}
+#drop{border:2px dashed var(--line);border-radius:12px;padding:30px 12px;text-align:center;color:var(--mut);cursor:pointer}
+#drop.over{border-color:var(--acc)}#preview,video{width:100%;border-radius:10px;margin-top:12px;display:none;background:#000}
+.row{display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap}label{color:var(--mut);font-size:13px}
+#stage{position:relative;height:520px;border-radius:14px;overflow:hidden;background:radial-gradient(circle at 50% 40%,#2a3260,#10132a)}
+#stage canvas{display:block;cursor:grab}#stage canvas:active{cursor:grabbing}
+#hint{position:absolute;inset:auto 0 12px;text-align:center;color:var(--mut);font-size:13px;pointer-events:none}
+#busy{position:absolute;inset:0;display:none;place-items:center;background:#0b0d1acc;color:var(--acc)}
+.chip{display:inline-block;padding:2px 10px;border-radius:99px;background:#232948;margin-right:6px;font-size:13px;text-transform:capitalize}
+#trace{list-style:none;padding:0;margin:10px 0 0;font-size:13px;color:var(--mut)}#trace b{color:var(--fg)}
+h2{font-size:16px;margin:0}.err{color:#ff8a8a}.tools{position:absolute;top:10px;right:10px;display:flex;gap:6px}
+</style></head><body>
+<header><h1>Poké<span>Card</span> 3D — scan a card, spin its Pokémon</h1><nav style="display:flex;gap:16px"><a href="/" style="color:#ffcb05;font-weight:700;text-decoration:none;white-space:nowrap">Home</a><a href="/detect" style="color:#ffcb05;font-weight:700;text-decoration:none;white-space:nowrap">Detect (AR) &rarr;</a><a href="/battle" style="color:#ffcb05;font-weight:700;text-decoration:none;white-space:nowrap">Battle &rarr;</a></nav></header>
+<main>
+<section class="panel">
+  <div class="tabs"><button id="tUp" class="on">Upload image</button><button id="tCam">Show card to camera</button></div>
+  <div id="upUI"><div id="drop">Drop a card image here or click to choose</div>
+    <input id="file" type="file" accept="image/*" hidden></div>
+  <div id="camUI" hidden>
+    <video id="video" playsinline muted></video>
+    <div class="row"><button class="primary" id="snap">Capture &amp; identify</button>
+      <label><input type="checkbox" id="auto"> auto-scan every 4s</label></div></div>
+  <img id="preview" alt="">
+  <div id="info" style="margin-top:16px"></div>
+  <div id="rate"></div>
+  <ul id="trace"></ul>
+</section>
+<section>
+  <div id="stage"><div class="tools"><button id="anim" class="on">Animate</button><button id="rot" class="on">Auto-spin</button><button id="reset">Reset view</button></div>
+    <div id="hint">Drag to rotate · scroll/pinch to zoom · right-drag to pan</div><div id="busy">Agent working…</div></div>
+</section></main>
+<script type="module">
+import * as THREE from "three";
+import {OrbitControls} from "three/addons/controls/OrbitControls.js";
+import {GLTFLoader} from "three/addons/loaders/GLTFLoader.js";
+import {DRACOLoader} from "three/addons/loaders/DRACOLoader.js";   // pack models use Draco-compressed meshes
+const $=id=>document.getElementById(id);
+// ---- 3D viewer ----
+const stage=$("stage"),renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+stage.prepend(renderer.domElement);renderer.setPixelRatio(Math.min(devicePixelRatio,2));   // cap: 3x phones would render 9x pixels for little gain
+const scene=new THREE.Scene(),cam=new THREE.PerspectiveCamera(40,1,.1,100);cam.position.set(0,.2,4.2);
+scene.add(new THREE.HemisphereLight(0xffffff,0x445577,1.6));
+const sun=new THREE.DirectionalLight(0xffffff,2.2);sun.position.set(3,4,5);scene.add(sun);
+const ctl=new OrbitControls(cam,renderer.domElement);ctl.enableDamping=true;ctl.autoRotate=true;ctl.autoRotateSpeed=2.5;
+let current=null,mixer=null;
+const clock=new THREE.Clock();
+// One shared loader (decoder + wasm are fetched once). Textures are WebP, decoded natively by the browser.
+const draco=new DRACOLoader().setDecoderPath(window.PC3D.draco);
+const loader=new GLTFLoader().setDRACOLoader(draco);
+new ResizeObserver(()=>{const w=stage.clientWidth,h=stage.clientHeight;renderer.setSize(w,h);cam.aspect=w/h;cam.updateProjectionMatrix()}).observe(stage);
+renderer.setAnimationLoop(()=>{const dt=clock.getDelta();if(mixer&&mixer.timeScale>0)mixer.update(dt);ctl.update();renderer.render(scene,cam)});
+$("rot").onclick=e=>{ctl.autoRotate=!ctl.autoRotate;e.target.classList.toggle("on",ctl.autoRotate)};
+$("anim").onclick=e=>{if(!mixer)return;mixer.timeScale=mixer.timeScale?0:1;e.target.classList.toggle("on",!!mixer.timeScale)};
+$("reset").onclick=()=>{ctl.reset();cam.position.set(0,.2,4.2)};
+// Free GPU memory held by the previous model (geometry, materials, textures).
+function disposeCurrent(){if(!current)return;scene.remove(current);
+  current.traverse(o=>{o.geometry?.dispose();[].concat(o.material||[]).forEach(m=>{for(const k in m)m[k]?.isTexture&&m[k].dispose();m.dispose()})});
+  mixer?.stopAllAction();mixer=null;current=null}
+function showModel(url){loader.load(url,g=>{
+  disposeCurrent();const m=g.scene;
+  m.traverse(o=>{if(o.isSkinnedMesh)o.frustumCulled=false});       // skinned bounds are unreliable while animating
+  if(g.animations.length){mixer=new THREE.AnimationMixer(m);mixer.clipAction(g.animations[0]).play();mixer.update(0);  // idle loop
+    $("anim").style.display="";$("anim").classList.add("on")}else $("anim").style.display="none";
+  m.updateMatrixWorld(true);
+  const box=new THREE.Box3().setFromObject(m,true),c=box.getCenter(new THREE.Vector3());   // precise = uses the skinned pose
+  m.position.sub(c);const s=2.4/Math.max(...box.getSize(new THREE.Vector3()).toArray());
+  current=new THREE.Group();current.add(m);current.scale.setScalar(s);scene.add(current);ctl.saveState()})}
+// ---- input modes ----
+let stream=null,busy=false,timer=null;
+async function setMode(cam_){
+  $("tUp").classList.toggle("on",!cam_);$("tCam").classList.toggle("on",cam_);
+  $("upUI").hidden=cam_;$("camUI").hidden=!cam_;
+  if(cam_){ // camera starts only after this option is chosen
+    try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment",width:{ideal:1280}}});
+      $("video").srcObject=stream;$("video").style.display="block";await $("video").play();$("preview").style.display="none"}
+    catch(e){$("info").innerHTML=`<span class="err">Camera unavailable: ${e.message}</span>`}
+  }else stopCam();
+}
+function stopCam(){stream?.getTracks().forEach(t=>t.stop());stream=null;$("video").style.display="none";$("auto").checked=false;clearInterval(timer)}
+$("tUp").onclick=()=>setMode(false);$("tCam").onclick=()=>setMode(true);
+$("drop").onclick=()=>$("file").click();
+async function sendFile(f){                          // big phone photos (2-5 MB) are shrunk here first: 5-10x less to upload
+  if(f.size<400e3||!self.createImageBitmap)return send(f);
+  try{const b=await createImageBitmap(f);const o=await toBlob(b,b.width,b.height);b.close&&b.close();send(o)}catch(_){send(f)}}
+$("file").onchange=e=>e.target.files[0]&&sendFile(e.target.files[0]);
+$("drop").ondragover=e=>{e.preventDefault();$("drop").classList.add("over")};
+$("drop").ondragleave=()=>$("drop").classList.remove("over");
+$("drop").ondrop=e=>{e.preventDefault();$("drop").classList.remove("over");e.dataTransfer.files[0]&&sendFile(e.dataTransfer.files[0])};
+// Efficiency: never upload more pixels than the server uses (it shrinks to 1600 px anyway), JPEG 0.82 instead of 0.92.
+const MAXPX=1600;
+function toBlob(src,w,h,q=.82){const k=Math.min(1,MAXPX/Math.max(w,h)),c=document.createElement("canvas");c.width=Math.round(w*k);c.height=Math.round(h*k);
+  c.getContext("2d").drawImage(src,0,0,c.width,c.height);return new Promise(r=>c.toBlob(r,"image/jpeg",q))}
+let lastTiny=null;
+function changed(v){                                  // 16x12 grey thumbnail; "the same picture as last time" costs no upload
+  const c=changed.c||(changed.c=document.createElement("canvas"));c.width=16;c.height=12;
+  const x=c.getContext("2d",{willReadFrequently:true});x.drawImage(v,0,0,16,12);const d=x.getImageData(0,0,16,12).data,t=[];
+  for(let i=0;i<d.length;i+=4)t.push(d[i]+d[i+1]+d[i+2]);
+  const diff=lastTiny?t.reduce((s,a,i)=>s+Math.abs(a-lastTiny[i]),0)/t.length/3:99;lastTiny=t;return diff>4}
+async function snap(auto){const v=$("video");if(!stream||!v.videoWidth||busy||document.hidden)return;
+  if(auto===true&&!changed(v))return;                 // auto-scan: skip frames that look like the last one
+  send(await toBlob(v,v.videoWidth,v.videoHeight))}
+$("snap").onclick=()=>snap();
+$("auto").onchange=e=>{clearInterval(timer);if(e.target.checked)timer=setInterval(()=>snap(true),4000)};
+// ---- talk to the agent ----
+async function send(blob){
+  if(busy)return;busy=true;$("busy").style.display="grid";$("snap").disabled=true;
+  if(!stream){const p=$("preview");if(p.src.startsWith("blob:"))URL.revokeObjectURL(p.src);p.src=URL.createObjectURL(blob);p.style.display="block"}
+  const fd=new FormData();fd.append("image",blob,"card.jpg");
+  try{const r=await fetch("/api/recognize",{method:"POST",body:fd}),d=await r.json();if(!r.ok)throw Error(d.error);render(d)}
+  catch(e){$("info").innerHTML=`<span class="err">${e.message}</span>`}
+  busy=false;$("busy").style.display="none";$("snap").disabled=false;
+}
+const rateMod=import("/static/js/rating.js");   // loaded once, in the background
+function render(d){
+  const c=d.card,p=d.pokemon;let h="";
+  if(c)h+=`<h2>${c.name}</h2><div style="color:var(--mut);margin:4px 0 8px">${c.set} · #${c.number}</div>`;
+  if(p)h+=`<div>${p.types.map(t=>`<span class="chip">${t}</span>`).join("")}</div>
+    <div style="margin-top:8px;color:var(--mut)">Pokédex #${p.id}${p.height_m?` · ${p.height_m} m · ${p.weight_kg} kg`:""}</div>`;
+  if(d.model_source){const m=d.model_source,lbl={glb:"3D model pack",custom:"Your sprite",custom_model:"Custom 3D model",gen1:"Gen 1 3D model",relief:"Textured relief (artwork)",sheet:"Sprite chart",artwork:"Assumed (official artwork)"}[m.kind];
+    h+=`<div style="margin-top:10px;display:flex;gap:12px;align-items:center">
+      ${d.sprite_png?`<img src="${d.sprite_png}" style="height:72px;image-rendering:pixelated;background:#0b0d1a;border-radius:8px">`:""}
+      <div><span class="chip" style="background:var(--acc);color:#1a1a1a">${lbl}</span>
+      <div style="color:var(--mut);font-size:13px;margin-top:4px">${m.detail}${m.similarity!=null?"<br>match vs artwork: "+m.similarity:""}</div></div></div>`}
+  if(d.message)h+=`<div class="err" style="margin-top:8px">${d.message}</div>`;
+  $("info").innerHTML=h;
+  $("trace").innerHTML=d.trace.map(t=>`<li><b>${t.step}</b> (${t.t}s) — ${t.detail}</li>`).join("");
+  if(d.model_url)showModel(d.model_url);
+  rateMod.then(m=>m.mountRating($("rate"),d,render));   // thumbs up/down panel (static/js/rating.js); a correction re-renders
+}
+</script></body></html>

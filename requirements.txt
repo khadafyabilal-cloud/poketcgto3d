@@ -1,0 +1,12 @@
+pokemon-card-recognizer
+bidict==0.22.1        # newer versions can't load the recognizer's bundled pickle
+flask
+requests
+numpy
+scipy
+pillow
+trimesh
+opencv-python-headless   # yellow-border card detection + straightening
+cryptography              # self-signed HTTPS certificate for phones (--https)
+flask-compress            # optional: gzip for scripts/JSON
+# also needed (not a pip package): the Tesseract OCR program, so the Battle page can read HP/attacks - see README 1.1b

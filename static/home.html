@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f1220">
+<title>PokéCard 3D</title>
+<style>
+:root{--ink:#0f1220;--panel:#181c30;--line:rgba(255,255,255,.14);--fg:#f1f3fb;--mut:#a4abc9;--yellow:#ffcb05;--silver:#9aa3bd;
+  --font:ui-rounded,"SF Pro Rounded","Nunito","Segoe UI",system-ui,sans-serif}
+*{box-sizing:border-box}
+html{background:var(--ink)}
+body{margin:0;min-height:100vh;color:var(--fg);font:16px/1.5 var(--font);background:radial-gradient(1000px 500px at 50% -10%,#232a4d 0,var(--ink) 70%) no-repeat var(--ink);
+  padding:max(28px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(32px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}
+main{max-width:920px;margin:0 auto}
+h1{font-size:clamp(34px,7vw,56px);line-height:1.05;margin:0 0 6px;letter-spacing:-.02em}
+h1 span{color:var(--yellow)}
+.lead{color:var(--mut);margin:0 0 28px;font-size:17px}
+.modes{display:grid;grid-template-columns:1fr;gap:18px}
+@media(min-width:760px){.modes{grid-template-columns:1fr 1fr}}
+/* each mode is drawn like the cards the app looks for: a yellow outer border, then a thin gray frame inside it */
+.mode{border:5px solid var(--yellow);border-radius:20px;padding:5px;background:var(--yellow)}
+.mode>div{background:var(--panel);border:2px solid var(--silver);border-radius:14px;padding:20px 18px 18px;height:100%;display:flex;flex-direction:column}
+.mode h2{margin:0;font-size:26px}
+.mode p{color:var(--mut);margin:6px 0 14px;font-size:15px}
+.opts{display:grid;gap:10px;margin-top:auto}
+.opt{display:block;text-decoration:none;color:var(--fg);padding:12px 14px;border-radius:14px;border:1px solid var(--line);background:#20253d;touch-action:manipulation}
+.opt b{display:block;font-size:16px}.opt small{display:block;color:var(--mut);font-size:13px;margin-top:1px}
+.opt.main{background:var(--yellow);border-color:var(--yellow);color:#1a1a1a}.opt.main small{color:#3b3b3b}
+.opt:hover{border-color:var(--yellow)}.opt.main:hover{filter:brightness(1.06)}
+.opt:focus-visible{outline:2px solid #fff;outline-offset:2px}
+#about{margin-top:30px;padding-top:18px;border-top:1px solid var(--line);max-width:68ch}
+#about h2{font-size:18px;margin:0 0 6px}#about p{margin:0;color:var(--mut)}
+footer{margin-top:22px;color:var(--mut);font-size:13px}
+footer a{color:var(--yellow)}
+</style>
+</head>
+<body>
+<main>
+  <h1>Poké<span>Card</span> 3D</h1>
+  <p class="lead">Pick what you want to do.</p>
+
+  <div class="modes">
+    <section class="mode" aria-labelledby="hDetect"><div>
+      <h2 id="hDetect">Detect</h2>
+      <p>Find cards, see their 3D Pokémon, and check or correct what the agent read.</p>
+      <div class="opts">
+        <a class="opt main" href="/detect?go=ar"><b>Camera with AR</b><small>Live camera; the model stands on each card</small></a>
+        <a class="opt" href="/detect?go=viewer"><b>Without AR</b><small>Take or upload a photo; the model appears on the page</small></a>
+        <a class="opt" href="/detect"><b>Open Detect</b><small>Choose on the next screen</small></a>
+      </div>
+    </div></section>
+
+    <section class="mode" aria-labelledby="hBattle"><div>
+      <h2 id="hBattle">Battle</h2>
+      <p>Show one card, then fight a random Gen 1 opponent using the card's own attacks.</p>
+      <div class="opts">
+        <a class="opt main" href="/battle?go=ar"><b>Start battle</b><small>Opens the camera right away</small></a>
+        <a class="opt" href="/battle"><b>Open Battle</b><small>Read how it works first</small></a>
+      </div>
+    </div></section>
+  </div>
+
+  <section id="about">
+    <h2>About</h2>
+    <p>PokéCard 3D recognises physical Pokémon cards through your camera and stands the matching 3D Pokémon on top of each one in augmented reality. It also reads each card's HP and attacks, learns from your corrections, and turns the card into a mock battle against a random opponent.</p>
+  </section>
+  <footer>Just want a single picture identified? <a href="/scan">Scan a photo</a>.</footer>
+</main>
+</body>
+</html>

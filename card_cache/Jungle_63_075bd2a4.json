@@ -1,0 +1,1 @@
+{"hp": 40, "attacks": [{"name": "Stun spore", "damage": 10, "modifier": null, "type": "grass", "cost": ["grass"], "text": ""}, {"name": "Leech life", "damage": 10, "modifier": null, "type": "grass", "cost": ["grass"], "text": ""}], "confidence": "high", "source": "user", "notes": ["Corrected by a player."]}

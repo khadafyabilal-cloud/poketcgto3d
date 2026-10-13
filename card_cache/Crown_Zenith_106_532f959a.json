@@ -1,0 +1,1 @@
+{"hp": 110, "attacks": [{"name": "Smash kick", "damage": 30, "modifier": null, "type": "normal", "cost": ["normal"], "text": ""}, {"name": "Adrena tackle", "damage": 180, "modifier": null, "type": "normal", "cost": ["normal"], "text": ""}], "confidence": "high", "source": "user", "notes": ["Corrected by a player."]}

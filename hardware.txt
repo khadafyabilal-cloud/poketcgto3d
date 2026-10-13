@@ -1,0 +1,306 @@
+HARDWARE.TXT - where PokéCard 3D runs its code, and what travels over the internet
+==================================================================================
+
+This document explains, for each step of the application, WHICH computer does the work
+(the user's phone/laptop browser = "client", or the Python server = "server"), WHICH part
+of that computer (CPU, GPU, camera, memory, network), and how much data moves.
+
+Numbers marked (measured) come from the files in this project. Numbers marked (estimate) are
+typical values - your devices and photos will differ.
+
+
+1. THE BIG PICTURE
+------------------
+
+    ┌───────────────────────── CLIENT (phone or laptop browser) ─────────────────────────┐
+    │ camera sensor ─► video decoder ─► JS main thread ─► GPU (WebGL: draws 3D + video)  │
+    │                          │                ▲                                         │
+    │                          ▼                │ tracks (corners + pose matrix)          │
+    │                    Web Worker (CPU, WebAssembly): OpenCV.js finds the yellow/gray border │
+    └────────────────────────────┬────────────────────────────────────────▲──────────────┘
+                                 │ HTTPS: 1 JPEG + 4 corners               │ JSON + a 3D model file (.glb)
+                                 ▼                                         │
+    ┌─────────────────────────────── SERVER (your laptop/PC running python app.py) ───────┐
+    │ Flask (CPU) ─► OpenCV Python (CPU): refine corners + straighten the card            │
+    │             ─► card recognizer neural network (GPU if NVIDIA, else CPU)             │
+    │             ─► picks / builds the 3D model file (CPU), reads files from disk        │
+    └───────────────────────────────┬─────────────────────────────────────────────────────┘
+                                    │ occasional requests
+                                    ▼
+                          PokeAPI (pokeapi.co): Pokémon facts + official artwork
+                          CDNs (jsDelivr, docs.opencv.org): the JavaScript libraries
+
+Design rule used everywhere: do the work that must happen every frame (~30 times a second) on
+the CLIENT, because sending frames to a server would be too slow and expensive; do the rare,
+heavy work (reading a card with a neural network, building a model) on the SERVER, once per
+card, and remember the answer.
+
+IMPORTANT: when you run "python app.py" on your laptop and open the page on your phone, the
+laptop is the SERVER and the phone is the CLIENT. They are two different machines on your Wi-Fi.
+If you open http://127.0.0.1:5000 on the laptop itself, the same machine plays both roles.
+
+
+2. CLIENT-SIDE HARDWARE (what your phone/laptop does)
+-----------------------------------------------------
+
+2.1 Camera sensor and video decoder
+    - Opened by AR.js (ArToolkitSource) or, if AR.js cannot load, by the browser's
+      getUserMedia API (static/js/detect.js: openCamera). Requested size: 1280 x 720, rear camera.
+    - The camera hardware delivers frames to the browser's video pipeline; a <video> element shows
+      them. No JavaScript touches every pixel for display - the browser/GPU composites the video.
+    - Needs a "secure context" (HTTPS or localhost) - that is why phones need `--https`.
+
+2.2 CPU - main JavaScript thread
+    - Runs detect.js: copies a small version of the video frame to a canvas (480 px wide, so about
+      480 x 270 x 4 bytes = 0.5 MB per frame, in memory only - never sent over the network),
+      handles buttons, labels and the requests to the server.
+    - Does NOT run OpenCV, so the screen stays smooth.
+
+2.2b CPU - Web Worker thread (static/js/tracker.worker.js)
+    - A second thread that runs OpenCV.js: a WebAssembly build of OpenCV (near-native speed on the
+      CPU; it does not use the GPU). Per frame it does: colour conversion to HSV, TWO
+      thresholds (yellow and gray borders, one mask each), morphology, contour finding for each, convex hull, polygon approximation, then the
+      line-fitting and pose maths in plain JavaScript (card-tracker.js, card-geometry.js).
+    - Frame hand-over uses a "transferable" buffer (moved, not copied) so it costs almost nothing.
+    - Rate: adaptive. The next frame is sent after max(33 ms, 2 x the last processing time), capped
+      at 100 ms, and frames are skipped while the worker is busy. Looking for gray as well adds one more threshold + contour pass (roughly +20-40 %). The edge-repair second pass (Canny + strip tests) runs only about every 400 ms, or when nothing is found, adding a few ms on average (estimate). Typical cost is a few to ~20 ms per
+      frame (estimate); a slow phone simply runs at a lower tracking rate instead of lagging.
+    - Memory: OpenCV.js works in WebAssembly memory (a few MB of image buffers allocated once and
+      reused; they are not garbage collected, so the code deletes them explicitly).
+    - Power: this is the main battery cost on phones. The loop pauses while the tab is hidden.
+
+2.3 GPU (WebGL, through three.js)
+    - three.js draws the 3D Pokémon every screen refresh (60 Hz typically) on a transparent canvas laid
+      over the video. All the heavy per-pixel work (shading, texture sampling, depth test) is done
+      by the GPU. The CPU only sends it the camera pose matrix per frame.
+    - Each model's vertices, normals, UV coordinates and texture images are uploaded to GPU memory
+      once, when the model is loaded, and stay there while it is shown. A Gen 1 model is about
+      40 K - 90 K triangles worth of data at most (measured: median file 189 KB, so well under 10 MB
+      of GPU memory including the decoded texture, which is up to 512 x 512 x 4 bytes = 1 MB).
+    - The drawing canvas is capped at 1024 px on its longest side (detect.js: MAX_BACKING) and scaled
+      up by the browser, which limits GPU work on high-resolution phones.
+    - Animated pack models (optional model pack) use "skinning": the GPU bends the mesh by bones
+      (three.js AnimationMixer updates the bone matrices on the CPU, the GPU applies them).
+      Gen 1, custom and relief models have no animation, so they cost almost nothing per frame.
+    - Draco-compressed meshes (the optional pack) are decoded on the CPU by a small WebAssembly
+      decoder when the model loads.
+
+2.4 Memory (RAM)
+    - Video frames, the 480-px work canvas, OpenCV buffers, up to 8 cached models (detect.js keeps
+      at most 8 loaded and frees the oldest unused one), textures. Roughly tens of MB in total (estimate).
+
+2.5 Sensors NOT used
+    - No GPS, microphone, gyroscope or accelerometer. The card's position comes only from the camera
+      image; pose is computed from the 4 corners of the yellow border and an assumed lens
+      (63 degree horizontal field of view, adjustable in Settings).
+
+2.6 Client storage
+    - localStorage keeps the settings (border sensitivity, field of view, debug flag) and, once you use the
+      rating buttons, a random anonymous client id ("pc3d_client") so one person counts as one vote. The browser
+      HTTP cache keeps downloaded libraries and .glb models (models are sent with a one-day cache
+      header, /static/vendor files with a one-year header) so repeat visits download nothing.
+
+
+3. SERVER-SIDE HARDWARE (the computer running python app.py)
+------------------------------------------------------------
+
+3.1 CPU (always used)
+    - Flask handles requests (threaded: several at once).
+    - OpenCV (Python, card_detect.py): re-detects the card border on the full-resolution frame
+      inside a window around the browser's guess (refine_with_hint), then warps the card upright
+      (rectify). A few ms to tens of ms (estimate).
+    - Model building, when needed: numpy/scipy (relief.py, agent.build_model), Pillow (textures),
+      zlib (reading compressed model data). Relief generation is well under a second on a laptop CPU
+      (estimate) and is cached on disk afterwards.
+    - JSON/file I/O, optional gzip (flask-compress).
+
+3.2 GPU (optional, used only by the card recognizer)
+    - pokemon-card-recognizer is a PyTorch neural network. If an NVIDIA GPU with CUDA is present
+      PyTorch uses it automatically; otherwise it runs on the CPU (this is the slow, multi-second step
+      the README mentions). Nothing else on the server uses the GPU. Rendering is never done on the
+      server - the server only produces files and numbers.
+
+3.3 Memory (RAM)
+    - The recognizer's network and its card database are loaded once at start-up and stay in memory
+      (hundreds of MB to a few GB depending on the library version; estimate). This is why the first
+      start is slow and why only ONE recognition may run at a time (a lock in agent.py).
+    - scan_cache: up to 128 small card fingerprints (24 x 32 x 3 floats = about 9 KB each) plus their
+      JSON results - well under 5 MB.
+
+3.3b Card reading (CPU, new)
+    - When a card is seen for the first time the server runs the OCR program Tesseract (a separate process,
+      one CPU core for roughly 0.5 - 2 s, estimate) on two crops of the straightened card (HP corner, attack area)
+      and OpenCV HoughCircles for the energy circles (a few ms). The answer (HP, attacks, damage) is saved in
+      card_cache/<set>_<number>.json (about 1 KB) and never recomputed, so each distinct card costs this once.
+    - AR stability costs almost nothing: a vanished card's 3D model is kept in memory (about 20 s in Battle) instead of being
+      rebuilt, so a flicker no longer triggers a new download, a new server scan or a restart of the 5-second countdown.
+    - The battle rules (damage, turns, health bars) run in the browser on the main JS thread: a few
+      microseconds per move. Only the opponent request above touches the network.
+
+3.3c Card reading in the browser (only when the server has no Tesseract program)
+    - tesseract.js runs the same Tesseract engine as WebAssembly in a Web Worker on the CLIENT CPU for the two small
+      grey pictures (HP corner about 700 px wide, attack area about 1100 px wide; both from the server, each tens of KB).
+      Expect roughly 2 - 10 s on a phone (estimate) and a one-time ~10 MB download of the worker, WASM core and English
+      data from a CDN (cached by the browser afterwards). The recognised words (a few KB of JSON) go back to the server,
+      which parses them (microseconds of CPU) and caches the card, so it is read once per card, not once per device.
+
+3.4 Disk
+    - Reads: model_packs/regular.zip (optional), models/gen1/*.glb (151 files, 28.9 MB total, measured),
+      models/custom/charizard.glb (2.7 MB, measured), sprites/, sprite_sheets/.
+    - Writes when somebody votes: feedback/feedback.db (SQLite; a few KB per vote) and feedback/crops/<id>.jpg
+      (the straightened card, at most 440 px, roughly 20 - 60 KB each, estimate). This is the only data about
+      users the server keeps, and nothing is written for scans that are not rated. The SQLite work and the
+      learned-card matching (24x32x3 fingerprints compared in NumPy) are negligible CPU on the server.
+    - Writes (caches, safe to delete): card_cache/<set>_<number>.json (HP + attacks per card), pokemon_cache/<id>.json, species.json, models/relief/<id>.glb,
+      models/glb/ (slimmed pack models), models/<id>_<kind>.glb (voxel fallback), certs/ (HTTPS cert).
+
+3.5 Network card
+    - Serves pages, scripts and .glb files to the client; makes outbound calls to PokeAPI.
+    - Server load is small by design: the only per-frame work stays on the phone.
+
+
+4. INTERNET DATA: WHAT IS DOWNLOADED, WHEN, AND HOW MUCH
+--------------------------------------------------------
+
+4.1 To the client (phone/laptop browser)
+    A. Page and scripts from YOUR server (small, text):
+         detect.html (~8 KB; also served as /battle), detect.js, battle-engine.js, card-geometry.js, card-tracker.js, tracker.worker.js (together
+         about 60 KB of source before compression).
+    B. Libraries from CDNs, ONLY IF you have not run scripts/fetch_vendor.py (otherwise they come from
+       your server instead, over your Wi-Fi):
+         three.js core + add-ons: roughly 1.5 MB                      (jsDelivr)         (estimate)
+         OpenCV.js: about 10 MB, one file with WebAssembly inside     (docs.opencv.org)  (estimate)
+         AR.js (ar-threex.js): a few MB                               (jsDelivr)         (estimate)
+         Draco decoder (only needed for pack models): ~0.5 MB
+       These are downloaded once and then cached by the browser. First visit on mobile data can therefore
+       cost roughly 15 MB; later visits cost almost nothing.
+    C. 3D model, when a card is identified:
+         Gen 1 model: median 189 KB, largest 518 KB, smallest 33 KB (measured; 28.9 MB for all 151)
+         Charizard custom model: 2.7 MB (measured)
+         Relief model (everything newer): usually a few hundred KB (one 640-px PNG texture plus about
+           25 K triangles; the synthetic test file was 849 KB) (estimate)
+         Pack model: typically 0.2 - 3 MB after slimming (the README quotes 85 MB for the whole slimmed pack)
+       Each model is downloaded once per day per browser (cache header), then reused.
+
+4.2 From the client to the server (uploads)
+    - Scan page: the photo you pick/capture, shrunk by the SERVER to 1600 px before recognition (the upload
+      itself is the original file, often 1 - 5 MB from a phone camera; max accepted 16 MB).
+    - Detect (home) and Battle pages: ONE request per newly stable card, containing
+         a JPEG SNAPSHOT of just the card, straightened in the browser (440-800 px tall, about 40 - 70 KB,
+         estimate)  +  a flag snapshot=1. A card shown again is recognised from a 16x22 fingerprint in the
+         browser and NOT sent at all. With AR off, a photo you choose is uploaded instead (server finds the card).
+         Turning AR off (or touching the Teach form) stops the camera and tracker, which is the biggest saving.
+      It is NOT sent every frame. If identification fails it retries after 3, 6 and 12 seconds (3 tries per
+      card). A card the server already knows (same appearance, either way up) is answered from memory
+      without running the neural network. Result: typically 1 request per card per session, plus one if
+      you use "Pick Pokémon" (a tiny GET /api/pokemon?q=...).
+    - Not uploaded: the live video, the 480-px analysis frames, the tracker output. Everything per-frame stays
+      on the device.
+
+    - Ratings (thumbs up/down): one tiny JSON POST /api/feedback per tap - result id, anonymous client id,
+      target, vote (+1/-1) and an optional typed correction: about 150 - 300 bytes. Nothing is sent until a
+      button is pressed.
+
+    - Battle page only: ONE tiny GET /api/battle/opponent per battle (about 0.3 KB out, 1 - 2 KB back) plus the
+      opponent's 3D model download (a Gen 1 .glb, about 0.1 - 0.4 MB, then cached by the browser).
+
+4.3 From the server to the client (responses)
+    - /api/battle/scan JSON: card name/set/number, Pokémon facts, the model URL, a trace, and a 160-px
+      JPEG preview of the straightened card as a data URI (a few KB).
+    - Then the .glb download from 4.1 C.
+
+4.4 From the server to the internet (PokeAPI and artwork)
+    - species.json: one request on the very first start (all Pokémon names -> numbers; tens of KB), then
+      cached on disk.
+    - /pokemon/<id> JSON: one request per Pokémon, ever (a few hundred KB of JSON for some, estimate),
+      then cached in pokemon_cache/ - repeat scans need no network. If PokeAPI is unreachable, a model that
+      already exists (custom, Gen 1, pack) is still shown.
+    - Official artwork PNG: downloaded only when a RELIEF (or voxel) model must be built, i.e. for Pokémon
+      that are not in Gen 1, not custom and not in the pack - and only the first time; the finished model is
+      cached. Typically 100 - 300 KB (estimate).
+    - Gen 1 and Charizard cards need NO artwork download and no model building at all.
+
+4.5 Offline use
+    - After running scripts/fetch_vendor.py and once pokemon_cache/ and species.json are filled, the
+      whole thing runs on a local network without internet, except relief models for Pokémon that were never
+      seen before (they need the artwork).
+
+
+5. HOW EACH 3D MODEL IS CREATED AND SHOWN ON CLIENT HARDWARE
+------------------------------------------------------------
+
+All models end up as a .glb file (binary glTF) with the same convention: Y-up, facing +Z, standing on
+y = 0. The server (or a one-off script) creates the file; the client downloads and draws it. The server
+never renders anything. Where the work happens, per model type:
+
+5.1 Gen 1 models (Pokédex 1 - 151)            CREATED: once, offline, on a developer machine; SHOWN: client GPU
+    Created by scripts/fbx_to_glb.py (CPU, pure Python/numpy/Pillow, about 5 seconds for all 151):
+      parse the FBX file -> bake transforms -> triangulate -> find textures -> turn to face +Z using the eyes
+      -> embed textures (max 512 px) -> write .glb into models/gen1/.
+    At run time the server only reads the finished file from disk (disk -> network card). The client
+    GPU does all drawing. Cost on the server per card: effectively zero.
+
+5.2 Custom model (Charizard STL)              CREATED: once, offline; SHOWN: client GPU
+    scripts/stl_to_glb.py (CPU, numpy): read ~620 K triangles -> merge nearby vertices to about 90 K
+    triangles -> orient -> colour -> .glb (2.7 MB). Server just serves the file.
+
+5.3 Optional model pack (regular.zip)         CREATED: slimmed on the server at first request; SHOWN: client GPU
+    glb_library.py (CPU): reads one model out of the zip, removes unused animation clips (byte-for-byte copy of
+    meshes and textures), caches the result in models/glb/ (about 7 ms per model). The client CPU decodes the
+    Draco mesh (WebAssembly), and the GPU draws it; three.js updates the idle animation each frame.
+
+5.4 Relief model (artwork-based, other Pokémon)   CREATED: on the server at first request; SHOWN: client GPU
+    relief.py (server CPU, numpy/scipy, well under a second, then cached in models/relief/):
+      download the artwork (network) -> trim it -> shrink the silhouette to a 112-cell grid ->
+      distance transform (scipy) -> circular "pillow" thickness -> front and back surfaces -> normals ->
+      write .glb with the artwork as the texture.
+    The client downloads the file and its GPU draws a textured solid; no per-frame CPU work.
+
+5.5 Voxel model (last resort)                 CREATED: on the server; SHOWN: client GPU
+    agent.build_model (server CPU, numpy): one cube per sprite pixel, thickness from the distance to the
+    outline, only visible faces kept, exported with trimesh. Larger file sizes than the other types for the
+    same detail because every cube face is geometry.
+
+5.6 Showing any model on the client (detect.js / three.js)
+    1. fetch the .glb over HTTP (network).                         client network + browser cache
+    2. GLTFLoader parses it (CPU), decoding the embedded JPEG/PNG textures (CPU, then uploaded to GPU).
+    3. The model is measured (bounding box) and scaled so it fits the card; a soft shadow is added.
+    4. Every screen refresh: the pose matrix from the tracker (CPU worker) positions the model; the GPU
+       draws it over the video. Two cards: each model turns toward the other.
+    The server is not involved after step 1.
+
+5.7 Which hardware is the bottleneck?
+    - First visit: the network (about 15 MB of libraries) and the neural network on the server (first
+      recognition of each card, seconds on a CPU).
+    - Steady state: the phone CPU in the worker (OpenCV) and battery drain; the GPU load is light.
+    - Repeat card: almost nothing - the card is answered from the 128-entry memory cache and the model
+      from the browser cache.
+
+
+6. QUICK REFERENCE TABLE
+------------------------
+
+Step                                  | Runs on        | Hardware            | Data over the internet
+--------------------------------------|----------------|---------------------|--------------------------------------
+Open camera                           | client         | camera, video       | none
+Find yellow/gray border, pose (30 fps max) | client worker  | CPU (WebAssembly)   | none
+Draw 3D model on video                | client         | GPU (WebGL)         | none
+Load libraries (first visit)          | client         | network             | ~15 MB from CDN (or from your server)
+Identify a card                       | server         | CPU + GPU/CPU net   | up: ~100-300 KB JPEG, down: few KB
+Refine corners, straighten card       | server         | CPU                 | none
+Card -> species -> facts              | server         | CPU, disk           | PokeAPI JSON, once per Pokémon
+Build relief model                    | server         | CPU                 | artwork PNG, once per Pokémon
+Serve Gen 1 / custom model            | server -> client| disk, network      | 33-518 KB (Gen 1), 2.7 MB (Charizard)
+Parse + draw model                    | client         | CPU then GPU        | none after download
+
+
+7. SCALING NOTES
+----------------
+    - Many users at once: the per-frame work is on each user's own device, so the server load grows only with
+      the number of NEW cards being identified. The recognizer is the limit (one at a time per process); run
+      several server processes or add a GPU to scale. Everything else (static files, .glb files) can be
+      served by any web server or CDN.
+    - Slow phones: tracking automatically runs less often; lowering the camera resolution or the 1024-px render
+      cap in detect.js reduces work further.
+    - Privacy: only the single JPEG per newly detected card leaves the device, and only to YOUR server (plus
+      requests to PokeAPI that contain only a Pokédex number or the artwork URL, never your photo).

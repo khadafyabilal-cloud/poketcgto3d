@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f1220">
+<title>{{TITLE}} · PokéCard 3D</title>
+<!--PC3D_HEAD-->
+<style>
+:root{--ink:#0f1220;--glass:rgba(15,18,32,.74);--line:rgba(255,255,255,.16);--fg:#f1f3fb;--mut:#a4abc9;--yellow:#ffcb05;--bad:#ff8a8a;
+  --font:ui-rounded,"SF Pro Rounded","Nunito","Segoe UI",system-ui,sans-serif;--pad:max(14px,env(safe-area-inset-left))}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:#000;color:var(--fg);font:15px/1.4 var(--font);overflow:hidden;overscroll-behavior:none;-webkit-tap-highlight-color:transparent}
+button,input{font:inherit;color:inherit}
+/* camera + overlays share one box and the same cover-fit, so a pixel of video and a pixel of 3D line up exactly */
+.cover{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none}
+body>video{position:fixed!important;inset:0!important;width:100%!important;height:100%!important;margin:0!important;object-fit:cover!important;z-index:0!important}
+#gl{z-index:2}#fx{z-index:3}
+#labels{position:fixed;inset:0;z-index:4;pointer-events:none;overflow:hidden}
+.tag{position:absolute;left:0;top:0;transform:translate(-50%,-110%);padding:7px 12px;border-radius:12px;background:var(--glass);border:1px solid var(--line);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);text-align:center;pointer-events:auto;cursor:pointer;white-space:nowrap;max-width:70vw}
+.tag b{display:block;font-size:16px;overflow:hidden;text-overflow:ellipsis}.tag span{color:var(--mut);font-size:12.5px}
+.tag.bad{border-color:var(--bad)}.tag[hidden]{display:none}
+#top{position:fixed;z-index:6;top:max(10px,env(safe-area-inset-top));left:var(--pad);right:var(--pad);display:flex;gap:10px;align-items:center;justify-content:space-between;pointer-events:none}
+.pill{white-space:nowrap;pointer-events:auto;display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:0 14px;border-radius:99px;background:var(--glass);border:1px solid var(--line);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);text-decoration:none;color:var(--fg)}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--mut);flex:none}
+.dot.lock{background:var(--yellow)}.dot.err{background:var(--bad)}
+#dock{position:fixed;z-index:6;left:var(--pad);right:var(--pad);bottom:max(12px,env(safe-area-inset-bottom));display:flex;gap:6px;justify-content:center}
+#dock button{flex:1 1 0;min-width:0;max-width:130px;padding:0 4px;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}   /* five buttons always share ONE row (a wrapped dock used to cover the battle's attack buttons) */
+#dock button,.sheet button{min-height:46px;padding:0 14px;border-radius:14px;background:var(--glass);border:1px solid var(--line);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);cursor:pointer;touch-action:manipulation}
+#dock button{padding:0 4px}
+#dock button[aria-pressed=true]{border-color:var(--yellow);color:var(--yellow)}
+button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(--yellow);outline-offset:2px}
+#stats{position:fixed;z-index:6;left:var(--pad);bottom:calc(max(12px,env(safe-area-inset-bottom)) + 58px);font:12px/1.5 ui-monospace,Menlo,monospace;color:#d8ffd8;text-shadow:0 1px 2px #000;white-space:pre;pointer-events:none}
+.sheet{position:fixed;z-index:8;left:0;right:0;bottom:0;padding:18px var(--pad) max(18px,env(safe-area-inset-bottom));background:rgba(15,18,32,.94);border-top:1px solid var(--line);border-radius:20px 20px 0 0;max-width:560px;margin:0 auto}
+.sheet[hidden]{display:none}.sheet h2{margin:0 0 12px;font-size:17px}
+.sheet label{display:block;margin:12px 0 4px;color:var(--mut);font-size:13px}.sheet output{float:right;color:var(--fg)}
+.sheet input[type=range]{width:100%;accent-color:var(--yellow)}
+.sheet input[type=text]{width:100%;min-height:46px;padding:0 14px;border-radius:12px;border:1px solid var(--line);background:#181c30}
+.row{display:flex;gap:8px;margin-top:12px}.row button{flex:1}.sheet .primary{background:var(--yellow);border-color:var(--yellow);color:#1a1a1a;font-weight:700}
+.hint{color:var(--mut);font-size:13px;margin:6px 0 0}
+#start{position:fixed;inset:0;z-index:9;display:grid;place-items:center;padding:24px;background:radial-gradient(120% 90% at 50% 20%,#232a55,#0b0d1a)}
+#start[hidden]{display:none}.card{max-width:420px}.card h1{margin:0 0 10px;font-size:30px;line-height:1.1}
+.card p{margin:0 0 12px;color:var(--mut)}.card .primary{min-height:52px;padding:0 26px;border-radius:14px;border:0;background:var(--yellow);color:#1a1a1a;font-weight:800;font-size:17px;cursor:pointer}
+.card .primary:disabled{opacity:.55;cursor:wait}.card a{color:var(--mut)}
+.card .plain{display:block;margin-top:12px;min-height:44px;padding:0 16px;border-radius:14px;border:1px solid var(--line);background:transparent;cursor:pointer}
+#err{color:var(--bad);margin-top:14px;white-space:pre-line}
+
+/* ---- AR switch, AR-off layout (3D viewer + results + Teach form) ---- */
+#arToggle{cursor:pointer}#arToggle[aria-pressed=true] .dot{background:var(--yellow)}#arToggle[aria-pressed=false]{border-color:var(--yellow)}
+body[data-mode=battle] #arToggle{display:none}
+#viewer,#srcbar{display:none}
+:root{--topH:calc(max(10px,env(safe-area-inset-top)) + 58px);--viewH:min(38vh,420px)}
+body.ar-off{background:radial-gradient(120% 90% at 50% 0%,#232a55,#0b0d1a)}
+body.ar-off>video,body.ar-off #fx,body.ar-off #labels,body.ar-off #dock,body.ar-off #stats,body.ar-off #hud{display:none!important}
+body.ar-off #gl{inset:auto;left:0;top:var(--topH);width:100%;height:var(--viewH);pointer-events:auto;touch-action:none;z-index:2}
+body.ar-off #viewer{display:block;position:fixed;left:0;top:var(--topH);width:100%;height:var(--viewH);z-index:3;pointer-events:none;background:linear-gradient(#ffffff08,#0000)}
+#viewer[hidden]{display:none!important}
+#viewerEmpty{margin:0;position:absolute;inset:0;display:grid;place-items:center;color:var(--mut);padding:0 24px;text-align:center}
+#viewerEmpty[hidden]{display:none}
+#viewerTools{position:absolute;right:10px;top:8px;display:flex;gap:6px;pointer-events:auto}
+#viewerTools button{min-height:34px;padding:0 12px;border-radius:99px;background:var(--glass);border:1px solid var(--line);cursor:pointer;font-size:13px}
+#viewerTools button[aria-pressed=true]{border-color:var(--yellow);color:var(--yellow)}
+#res{position:fixed;z-index:8;left:0;right:0;bottom:0;max-height:72vh;overflow:auto;padding:16px var(--pad) max(18px,env(safe-area-inset-bottom));background:rgba(15,18,32,.96);border-top:1px solid var(--line);border-radius:20px 20px 0 0;max-width:640px;margin:0 auto;overscroll-behavior:contain}
+#res[hidden]{display:none}
+#resHead{display:flex;justify-content:flex-end;margin:-6px 0 4px}#resClose{min-height:40px;padding:0 16px;border-radius:12px;background:transparent;border:1px solid var(--line);cursor:pointer}body.ar-off #resHead{display:none}
+body.ar-off #res{max-width:none;margin:0;border-radius:0;border-top:1px solid var(--line);top:calc(var(--topH) + var(--viewH));max-height:none;bottom:calc(max(10px,env(safe-area-inset-bottom)) + 60px);z-index:5;background:#0f1220}
+body.ar-off #srcbar{display:flex;position:fixed;z-index:6;left:var(--pad);right:var(--pad);bottom:max(10px,env(safe-area-inset-bottom));gap:8px;justify-content:center}
+#srcbar button{min-height:46px;padding:0 18px;border-radius:14px;background:var(--glass);border:1px solid var(--line);cursor:pointer}#srcbar .primary{background:var(--yellow);border-color:var(--yellow);color:#1a1a1a;font-weight:700}
+body[data-mode=battle] #teachOpen{display:none}
+@media(min-width:900px){
+  body.ar-off #gl,body.ar-off #viewer{width:50%;height:calc(100% - var(--topH) - 70px)}
+  body.ar-off #res{left:50%;top:var(--topH)}
+}
+
+/* ---- Battle HUD (only shown when <body data-mode="battle">) ---- */
+#hud{display:none}body[data-mode=battle] #hud{display:block}
+body[data-mode=detect] #bAgain{display:none}
+/* BATTLE HUD: kept compact on purpose - all of it together (two HP pills, the message line and the 4 attack buttons) covers at most 1/6 of the screen (tests/browser_game.py measures it). */
+.fighter{position:fixed;z-index:6;left:var(--pad);width:min(170px,44vw);padding:5px 9px 6px;border-radius:11px;background:var(--glass);border:1px solid var(--line);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);font-size:12.5px;line-height:1.2}
+.fighter[hidden]{display:none}
+/* battle view: the HP bars live on the card in AR; these pills stay in the page only for screen readers */
+body.in-battle .fighter{width:1px;height:1px;padding:0;border:0;overflow:hidden;opacity:0;pointer-events:none}
+#veil{position:fixed;inset:0;z-index:1;pointer-events:none;opacity:0;transition:opacity .6s;background:radial-gradient(ellipse at 50% 45%,rgba(5,8,20,0) 38%,rgba(5,8,20,.6) 100%)}
+body.in-battle #veil{opacity:1}
+@media(prefers-reduced-motion:reduce){#veil{transition:none}}
+#fOpp{top:calc(max(10px,env(safe-area-inset-top)) + 52px);right:var(--pad);left:auto}
+#fMe{left:var(--pad);bottom:calc(max(12px,env(safe-area-inset-bottom)) + 58px + var(--movesH,0px))}
+.fighter .nm{display:flex;justify-content:space-between;align-items:baseline;gap:6px;font-weight:700}.fighter .nm span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fighter .nm small{color:var(--mut);font-weight:500;font-size:10.5px}
+.bar{height:6px;margin-top:4px;border-radius:99px;background:#ffffff1f;overflow:hidden}
+.bar i{display:block;height:100%;width:100%;border-radius:99px;background:#4fd05a;transition:width .6s ease,background-color .6s}
+.hpn{margin-top:2px;font:10.5px ui-monospace,Menlo,monospace;color:var(--mut);text-align:right}
+#bMsg{position:fixed;z-index:6;left:50%;transform:translateX(-50%);top:calc(max(10px,env(safe-area-inset-top)) + 100px);width:min(340px,calc(100vw - 28px));text-align:center;padding:4px 10px;border-radius:11px;background:var(--glass);border:1px solid var(--line);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);font-size:12px;line-height:1.25;max-height:2.9em;overflow:hidden}
+#bMsg[hidden]{display:none}
+#bMsg button{margin-top:2px;min-height:30px;padding:0 14px;border-radius:9px;border:0;background:var(--yellow);color:#1a1a1a;font-weight:800;font-size:12px;cursor:pointer}
+#bMsg.over{max-height:none}
+#moves{position:fixed;z-index:6;left:50%;transform:translateX(-50%);width:min(340px,calc(100vw - 28px));bottom:calc(max(12px,env(safe-area-inset-bottom)) + 58px);display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+#moves[hidden]{display:none}
+.mv{position:relative;min-height:34px;padding:3px 8px 3px 14px;border-radius:10px;background:var(--glass);border:1px solid var(--line);text-align:left;cursor:pointer;touch-action:manipulation;overflow:hidden;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.mv::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;background:var(--tc,#c9c5b2)}
+.mv b{display:block;font-size:12.5px;line-height:1.15;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mv span{display:block;font-size:10.5px;line-height:1.15;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mv:disabled{opacity:.5;cursor:default}.mv:focus-visible{outline:2px solid var(--yellow);outline-offset:2px}
+
+@media(prefers-reduced-motion:no-preference){.dot:not(.lock):not(.err){animation:breathe 1.6s ease-in-out infinite}@keyframes breathe{50%{opacity:.35}}}
+</style>
+</head>
+<body data-mode="{{MODE}}">
+<canvas id="gl" class="cover"></canvas>
+<canvas id="fx" class="cover"></canvas>
+<div id="veil"></div>
+<div id="labels"></div>
+
+<div id="top">
+  <button class="pill" id="arToggle" type="button" aria-pressed="true" title="Turn the live AR camera on or off. Off = nothing runs on the camera; the 3D model shows in the page instead.">
+    <span class="dot" id="arDot"></span><span id="arLabel">AR on</span></button>
+  <a class="pill" id="home" href="/" title="Back to the home page" aria-label="Home">⌂</a>
+  <a class="pill" id="swap" href="/battle">Battle</a>
+  <div class="pill" role="status" aria-live="polite" style="min-width:0;flex:0 1 auto;overflow:hidden"><span class="dot" id="dot"></span><span id="status" style="overflow:hidden;text-overflow:ellipsis">Camera off</span></div>
+</div>
+<pre id="stats" hidden></pre>
+
+<div id="hud">
+  <section class="fighter" id="fOpp" hidden aria-label="Opponent"><div class="nm"><span id="oName"></span><small>Opponent</small></div><div class="bar"><i id="oBar"></i></div><div class="hpn" id="oHp"></div></section>
+  <div id="bMsg" role="status" aria-live="polite" hidden></div>
+  <section class="fighter" id="fMe" hidden aria-label="Your Pokémon"><div class="nm"><span id="mName"></span><small>You</small></div><div class="bar"><i id="mBar"></i></div><div class="hpn" id="mHp"></div></section>
+  <div id="moves" role="group" aria-label="Choose an attack" hidden></div>
+</div>
+
+<!-- AR OFF: the page shows a 3D viewer (the #gl canvas is laid over #viewer), the detection results and the Teach form -->
+<section id="viewer" aria-label="3D model viewer" hidden>
+  <p id="viewerEmpty">The 3D model appears here.</p>
+  <div id="viewerTools"><button type="button" id="vSpin" aria-pressed="true">Auto-spin</button><button type="button" id="vReset">Reset view</button></div>
+</section>
+<section id="res" aria-label="Detection results" hidden><div id="resHead"><button type="button" id="resClose">Close</button></div><div id="resMain"></div></section>
+<div id="srcbar" hidden>
+  <button type="button" id="bShoot" class="primary">Take photo</button>
+  <button type="button" id="bUpload">Upload photo</button>
+  <input id="photo" type="file" accept="image/*" hidden>
+  <input id="shoot" type="file" accept="image/*" capture="environment" hidden>
+</div>
+
+<nav id="dock" hidden>
+  <button id="bFlip" title="Turn the selected card around">Flip card</button>
+  <button id="bRate" title="What the agent read: Pokémon, HP and attacks - rate it or teach it">Details</button>
+  <button id="bPick" title="Choose a Pokémon by hand">Pick Pokémon</button>
+  <button id="bDebug" aria-pressed="false" title="Show what the tracker sees">Debug</button>
+  <button id="bSet" title="Tracking settings">Settings</button>
+</nav>
+
+<aside class="sheet" id="sPick" hidden>
+  <h2>Pick a Pokémon</h2>
+  <label for="pickQ">Name or Pokédex number</label>
+  <input id="pickQ" type="text" inputmode="text" autocomplete="off" placeholder="pikachu or 25">
+  <p class="hint" id="pickMsg">The model appears on the selected card.</p>
+  <div class="row"><button id="pickGo" class="primary">Show it</button><button id="pickX">Close</button></div>
+</aside>
+
+<aside class="sheet" id="sSet" hidden>
+  <h2>Tracking settings</h2>
+  <label for="sens">Border sensitivity <output id="sensV"></output></label>
+  <input id="sens" type="range" min="0" max="1" step="0.05">
+  <p class="hint">Raise it in dim light or if the border isn't found. Lower it if other yellow or gray things confuse the tracker. A gray border needs a table clearly lighter or darker than the border.</p>
+  <label for="fov">Camera field of view <output id="fovV"></output></label>
+  <input id="fov" type="range" min="40" max="95" step="1">
+  <p class="hint">If the model looks too flat or too stretched on the card, adjust this until it sits right.</p>
+  <div class="row"><button id="setReset">Reset</button><button id="setX" class="primary">Done</button></div>
+</aside>
+
+<section id="start">
+  <div class="card">
+    <h1 id="startH">Detect</h1>
+    <p id="startP">Lay one or two Pokémon cards on a table and point your camera at them. The yellow or gray border around each card is what the app locks onto, so keep it in view and in decent light.</p>
+    <button class="primary" id="go">Start camera (AR)</button>
+    <button class="plain" id="goNoAR" type="button">Use without AR</button>
+    <div id="err"></div>
+  </div>
+</section>
+
+<script>import("/static/js/detect.js?v=" + window.PC3D.v).catch(function (e) {
+  document.getElementById("err").textContent = "The page could not start.\n" + e.message; console.error(e); });</script>
+</body>
+</html>

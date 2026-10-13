@@ -1,0 +1,1 @@
+{"hp": 100, "attacks": [{"name": "Te ear y", "damage": 4, "modifier": null, "cost": [], "text": "re H by", "type": "grass"}], "confidence": "partial", "notes": ["Couldn't read the HP number - using 100.", "Read in the browser with tesseract.js."], "source": "ocr"}

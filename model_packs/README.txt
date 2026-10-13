@@ -1,0 +1,3 @@
+Put your Pokémon model pack here (e.g. regular.zip - do NOT unzip it).
+Files inside must be named by Pokédex number: 25.glb, 916-F.glb, 6-Mega.glb ...
+Loose .glb files and several zips are fine too. Set POKEMON_MODEL_PACKS to use another folder.
